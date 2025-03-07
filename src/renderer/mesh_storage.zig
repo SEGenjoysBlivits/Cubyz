@@ -26,7 +26,7 @@ const ChunkMeshNode = struct {
 	finishedMeshing: bool = false, // Must be synced with mesh.finishedMeshing
 	finishedMeshingHigherResolution: u8 = 0, // Must be synced with finishedMeshing of the 8 higher resolution chunks.
 	pos: chunk.ChunkPosition = undefined,
-	isNeighborLod: [6]bool = .{false} ** 6, // Must be synced with mesh.isNeighborLod
+	isNeighborLod: [6]bool = @splat(false), // Must be synced with mesh.isNeighborLod
 	mutex: std.Thread.Mutex = .{},
 };
 const storageSize = 64;
@@ -173,6 +173,21 @@ pub fn getBlock(x: i32, y: i32, z: i32) ?blocks.Block {
 	const mesh = node.mesh orelse return null;
 	const block = mesh.chunk.getBlock(x & chunk.chunkMask, y & chunk.chunkMask, z & chunk.chunkMask);
 	return block;
+}
+
+pub fn getLight(wx: i32, wy: i32, wz: i32) ?[6]u8 {
+	const node = getNodePointer(.{.wx = wx, .wy = wy, .wz = wz, .voxelSize = 1});
+	node.mutex.lock();
+	defer node.mutex.unlock();
+	const mesh = node.mesh orelse return null;
+	const x = (wx >> mesh.chunk.voxelSizeShift) & chunk.chunkMask;
+	const y = (wy >> mesh.chunk.voxelSizeShift) & chunk.chunkMask;
+	const z = (wz >> mesh.chunk.voxelSizeShift) & chunk.chunkMask;
+	mesh.lightingData[0].lock.lockRead();
+	defer mesh.lightingData[0].lock.unlockRead();
+	mesh.lightingData[1].lock.lockRead();
+	defer mesh.lightingData[1].lock.unlockRead();
+	return mesh.lightingData[1].getValue(x, y, z) ++ mesh.lightingData[0].getValue(x, y, z);
 }
 
 pub fn getBlockFromAnyLod(x: i32, y: i32, z: i32) blocks.Block {
@@ -356,7 +371,7 @@ fn freeOldMeshes(olderPx: i32, olderPy: i32, olderPz: i32, olderRD: u16) void { 
 						updateHigherLodNodeFinishedMeshing(mesh.pos, false);
 						mesh.decreaseRefCount();
 					}
-					node.isNeighborLod = .{false} ** 6;
+					node.isNeighborLod = @splat(false);
 				}
 			}
 		}
@@ -685,7 +700,7 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 	}
 	for(nodeList.items) |node| {
 		const pos = node.pos;
-		var isNeighborLod: [6]bool = .{false} ** 6;
+		var isNeighborLod: [6]bool = @splat(false);
 		if(pos.voxelSize != @as(i32, 1) << settings.highestLod) {
 			for(chunk.Neighbor.iterable) |neighbor| {
 				var neighborPos = chunk.ChunkPosition{
